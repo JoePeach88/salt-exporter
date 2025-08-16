@@ -1,0 +1,10 @@
+[Unit]
+Description=SaltStack Prometheus Exporter
+
+[Service]
+Type=simple
+ExecStart=/opt/saltstack/salt/bin/python3 /opt/salt/scripts/exporter/metrics_exporter.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
