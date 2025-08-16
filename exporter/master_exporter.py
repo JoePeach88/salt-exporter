@@ -23,9 +23,9 @@ def import_parents(level=1):
 
 import_parents(2)
 from ..modules.salt_master_local_client import salt_runner, salt_key
-__virtualname__ = "metrics_salt"
+__virtualname__ = "salt_master_metrics"
 log = logging.getLogger(__name__)
-formatter = logging.Formatter(fmt="%(asctime)s %(name)s.%(levelname)s: %(message)s", datefmt="%Y.%m.%d %H:%M:%S")
+formatter = logging.Formatter(fmt="%(message)s")
 handler = logging.StreamHandler(stream=sys.stdout)
 handler.setFormatter(formatter)
 log.addHandler(handler)

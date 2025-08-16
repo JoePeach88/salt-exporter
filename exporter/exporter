@@ -1,3 +1,4 @@
 [main]
-collect_delay=
+addr=
 port=
+collect_delay=

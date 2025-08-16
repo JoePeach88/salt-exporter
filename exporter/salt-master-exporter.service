@@ -1,0 +1,10 @@
+[Unit]
+Description=SaltStack salt-master Prometheus Exporter
+
+[Service]
+Type=simple
+ExecStart=/opt/saltstack/salt/bin/python3 /opt/saltstack/exporters/master_exporter/master_exporter.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

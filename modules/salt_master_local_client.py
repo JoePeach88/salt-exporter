@@ -1,6 +1,7 @@
 import salt.config
 import salt.key
 import salt.loader
+import salt.pillar
 import salt.runner
 
 
