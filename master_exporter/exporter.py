@@ -87,7 +87,7 @@ class SaltMetricsExporter:
             if metric is not None:
                 metric.set(value)
 
-    def run(self, addr = None, port = None, delay = None):
+    def run(self, addr=None, port=None, delay=None):
         server = prom.start_http_server(port if port else EXPORTER_PORT, addr=addr if addr else EXPORTER_ADDR)
         log.info(f"Server started on {':'.join(str(x) for x in server[0].server_address)}")
         while True:
