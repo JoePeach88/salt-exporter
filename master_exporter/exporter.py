@@ -55,12 +55,14 @@ class SaltMetricsExporter:
 
     def collect_data_counts(self):
         try:
+            log.info('Starting collecting data...')
             minion_statuses = salt_runner.cmd('manage.status', print_event=False)
             job_list = salt_runner.cmd('jobs.list_jobs', print_event=False)
             active_jobs_list = salt_runner.cmd('jobs.active', print_event=False)
             key_data = salt_key.list_keys()
             minions_up = len(minion_statuses.get('up', []))
             minions_down = len(minion_statuses.get('down', []))
+            log.info('Data collected.')
         except Exception as e:
             minion_statuses = []
             job_list = []
@@ -82,10 +84,15 @@ class SaltMetricsExporter:
         }
 
     def update_metrics(self, counts):
-        for key, value in counts.items():
-            metric = self.metrics.get(key)
-            if metric is not None:
-                metric.set(value)
+        log.info('Updating metrics...')
+        try:
+            for key, value in counts.items():
+                metric = self.metrics.get(key)
+                if metric is not None:
+                    metric.set(value)
+            log.info('Metrics updated.')
+        except Exception as e:
+            log.error(f'Something went wrong when trying to update metrics data: {repr(e)}')
 
     def run(self, addr=None, port=None, delay=None):
         server = prom.start_http_server(port if port else EXPORTER_PORT, addr=addr if addr else EXPORTER_ADDR)
@@ -101,20 +108,17 @@ if __name__ == '__main__':
         parser = argparse.ArgumentParser()
         parser.add_argument(
             '--addr',
-            help='The address where the server will operate.',
-            default='0.0.0.0'
+            help='The address where the server will operate.'
         )
         parser.add_argument(
             '--port',
             type=int,
-            help='The port where the server will operate.',
-            default=9111
+            help='The port where the server will operate.'
         )
         parser.add_argument(
             '--delay',
             type=int,
-            help='The delay between metrics updates.',
-            default=300
+            help='The delay between metrics updates.'
         )
         args = parser.parse_args()
         exporter = SaltMetricsExporter()
