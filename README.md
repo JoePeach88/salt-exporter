@@ -49,7 +49,7 @@ opt
 6. Reload daemon, enable and start unit:
 
 ```bash
-systemctl daemon-reload && systemctl enable --now salt-metrics-exporter.service
+systemctl daemon-reload && systemctl enable --now salt-master-exporter.service
 ```
 
 
