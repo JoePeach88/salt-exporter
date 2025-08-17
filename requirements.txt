@@ -1,2 +1,1 @@
 prometheus_client==0.22.1
-salt==3006.10

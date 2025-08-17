@@ -33,7 +33,7 @@ opt
        └── master_exporter
            ├── env.py
            ├── exporter
-           └── master_exporter.py
+           └── exporter.py
 ```
 
 3. Check that required ports are opened on firewall, for default configuration it\`s: `9111`
@@ -44,7 +44,7 @@ opt
 /opt/saltstack/salt/bin/python3 -m pip install -r /path/to/requirements.txt
 ```
 
-5. Copy unit file from downloaded repo to: `/etc/systemd/system/salt-metrics-exporter.service`
+5. Copy unit file from downloaded repo to: `/etc/systemd/system/salt-master-exporter.service`
 
 6. Reload daemon, enable and start unit:
 
