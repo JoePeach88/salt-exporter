@@ -6,6 +6,7 @@ import importlib
 import argparse
 import traceback
 import gc
+import re
 from pathlib import Path
 from env import *
 from datetime import datetime
@@ -32,7 +33,9 @@ formatter = logging.Formatter(fmt="%(message)s")
 handler = logging.StreamHandler(stream=sys.stdout)
 handler.setFormatter(formatter)
 log.addHandler(handler)
-gc.set_debug(gc.DEBUG_SAVEALL)
+gc.enable()
+gc.set_debug(0)
+gc.set_threshold(700, 10, 10)
 
 
 class SaltMetricsExporter:
@@ -85,7 +88,7 @@ class SaltMetricsExporter:
         'minion_job_duration': {
             'name': 'salt_minion_job_duration_seconds',
             'desc': 'Duration of Salt jobs in seconds.',
-            'type': prom.Summary,
+            'type': prom.Gauge,
             'labels': ['minion', 'jid', 'fun']
         },
         'minion_job_retcode': {
@@ -106,6 +109,7 @@ class SaltMetricsExporter:
         self.metrics = self._create_metrics()
 
     def _create_metrics(self):
+        log.info("Creating metrics...")
         metrics = {}
         try:
             for key, meta in self.METRICS_INFO.items():
@@ -119,6 +123,7 @@ class SaltMetricsExporter:
                         'type': 'labeled' if labels else 'not_labeled'
                     }
                 })
+            log.info('Metrics created.')
             return metrics
         except Exception:
             log.error(f'Something went wrong when trying to create metrics: {traceback.format_exc()}')
@@ -136,6 +141,7 @@ class SaltMetricsExporter:
                 'start_time': datetime.today().replace(hour=0, minute=0, second=0).strftime("%Y, %b %d %H:%M:%S"),
                 'end_time': datetime.today().replace(hour=23, minute=59, second=59).strftime("%Y, %b %d %H:%M:%S")
             }, print_event=EXPORTER_DEBUG)
+            job_list = dict(sorted(job_list.items(), reverse=True))
             active_jobs_list = salt_runner.cmd('jobs.active', print_event=EXPORTER_DEBUG)
             key_data = salt_key.list_keys()
             minions_up = minion_statuses.get('up', [])
@@ -157,18 +163,21 @@ class SaltMetricsExporter:
             log.info('Collecting jobs...')
             all_minions = minions_up + minions_down
             for minion in all_minions:
-                last_jobs = salt_runner.cmd('jobs.last_run', kwarg={'target': minion}, print_event=EXPORTER_DEBUG)
-                if not last_jobs:
+                last_job = [int(job_id) for job_id, details in job_list.items() if details.get('Target') == minion and not any(re.match(p, details.get('Function')) for p in EXPORTER_EXCLUDED_FUNCTIONS)]
+                if not last_job:
                     continue
+                last_job = max(last_job)
+                last_job_details = salt_runner.cmd('jobs.print_job', [last_job], print_event=EXPORTER_DEBUG)
 
-                for jid, jobs_data in last_jobs.items():
-                    fun = jobs_data.get('Function')
-                    job_result = jobs_data.get('Result', {}).get(minion, {})
+                if last_job_details:
+                    job_data = last_job_details[next(iter(last_job_details))]
+                    fun = job_data.get('Function')
+                    job_result = job_data.get('Result', {}).get(minion, {})
 
                     if not isinstance(job_result, dict) or not job_result:
                         continue
 
-                    if fun in EXPORTER_EXCLUDED_FUNCTIONS:
+                    if any(re.match(p, fun) for p in EXPORTER_EXCLUDED_FUNCTIONS):
                         continue
 
                     job_duration = 0
@@ -180,9 +189,9 @@ class SaltMetricsExporter:
 
                     metrics['minion_job_duration'].append({
                         'minion': minion,
-                        'jid': jid,
+                        'jid': last_job,
                         'fun': fun,
-                        'value': job_duration
+                        'value': job_duration / 1000
                     })
                     metrics['minion_job_retcode'].append({
                         'minion': minion,
@@ -192,7 +201,7 @@ class SaltMetricsExporter:
             log.info('Collected.')
             log.info('All data collected successfully!')
         except Exception:
-            log.error(f'Something went wrong when trying to collect metrics data: {traceback.format_exc()}\n{job_return}')
+            log.error(f'Something went wrong when trying to collect metrics data: {traceback.format_exc()}')
             minions_up = []
             minions_down = []
             job_list = {}
@@ -260,12 +269,11 @@ class SaltMetricsExporter:
                         _set_or_observe(labeled_metric, val)
             log.info('Metrics updated.')
         except Exception:
-            log.error(f'Something went wrong when trying to update metrics data: {traceback.format_exc()}\n{value}')
+            log.error(f'Something went wrong when trying to update metrics data: {traceback.format_exc()}')
 
     def run(self, addr: str = None, port: int = None, delay: int = None):
         server = prom.start_http_server(port if port else EXPORTER_PORT, addr=addr if addr else EXPORTER_ADDR)
         log.info(f"Server started on {':'.join(str(x) for x in server[0].server_address)}")
-        gc.collect()
         while True:
             counts = self.collect_data()
             self.update_metrics(counts)

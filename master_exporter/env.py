@@ -11,14 +11,7 @@ EXPORTER_ADDR = os.getenv('EXPORTER_ADDR') if os.getenv('EXPORTER_ADDR') else (c
 EXPORTER_COLLECT_DELAY = os.getenv('EXPORTER_COLLECT_DELAY') if os.getenv('EXPORTER_COLLECT_DELAY') else (config.get('main', 'collect_delay') if config_exists else 300)
 EXPORTER_PORT = os.getenv('EXPORTER_PORT') if os.getenv('EXPORTER_PORT') else (config.get('main', 'port') if config_exists else 9111)
 EXPORTER_DEBUG = os.getenv('EXPORTER_DEBUG') if os.getenv('EXPORTER_DEBUG') else (config.get('main', 'debug') if config_exists else False)
-EXPORTER_EXCLUDED_FUNCTIONS = os.getenv('EXPORTER_EXCLUDED_FUNCTIONS', '').split(',') if os.getenv('EXPORTER_EXCLUDED_FUNCTIONS', '').split(',') else (config.get('main', 'exclude_jobs').split(',') if config_exists else 
+EXPORTER_EXCLUDED_FUNCTIONS = os.getenv('EXPORTER_EXCLUDED_FUNCTIONS').split(',') if os.getenv('EXPORTER_EXCLUDED_FUNCTIONS') else (config.get('main', 'exclude_jobs').split(',') if config_exists else 
 [
-    'runner.jobs.active',
-    'runner.jobs.list_jobs',
-    'runner.jobs.lookup_jid',
-    'runner.jobs.find_job',
-    'runner.manage.status',
-    'runner.manage.up',
-    'runner.manage.down'
-    'runner.salt.cmd'
+    '^runner.*'
 ])
