@@ -1,4 +1,4 @@
-import time
+import socket
 import prometheus_client as prom
 import logging
 import sys
@@ -93,13 +93,13 @@ class SaltMetricsExporter:
             'name': 'salt_minion_job_duration_seconds',
             'desc': 'Duration of Salt jobs in seconds.',
             'type': prom.Gauge,
-            'labels': ['minion', 'jid', 'fun']
+            'labels': ['master', 'minion', 'jid', 'fun']
         },
         'minion_job_retcode': {
             'name': 'salt_minion_job_retcode',
             'desc': 'Retcode of Salt job.',
             'type': prom.Gauge,
-            'labels': ['minion', 'fun']
+            'labels': ['master', 'minion', 'fun']
         },
         'minion_status': {
             'name': 'salt_minion_status',
@@ -202,12 +202,14 @@ class SaltMetricsExporter:
                                 job_duration += job_data.get('duration')
 
                     metrics['minion_job_duration'].append({
+                        'master': socket.gethostname(),
                         'minion': minion,
                         'jid': last_job,
                         'fun': fun,
                         'value': job_duration / 1000
                     })
                     metrics['minion_job_retcode'].append({
+                        'master': socket.gethostname(),
                         'minion': minion,
                         'fun': fun,
                         'value': job_result.get('retcode')
@@ -290,19 +292,17 @@ class SaltMetricsExporter:
             log.error(f'Something went wrong when trying to update metrics data: {traceback.format_exc()}')
 
     def send_data_to_main(self, counts: dict):
-        import socket
         _headers = {
             "Content-Type": "application/json",
             "User-Agent": f"slave_master_{socket.gethostname().split('.')[0]}"
         }
-        response = requests.post(f'{EXPORTER_MAIN_MASTER}:{EXPORTER_RECIEVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
-        log.info(f'Data sent to main master server, response: {response.status_code} - {response.text}')
+        try:
+            response = requests.post(f'http://{EXPORTER_MAIN_MASTER_ADDR}:{EXPORTER_RECIEVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
+            log.info(f'Data sent to main master server, response: {response.status_code} - {response.text}')
+        except:
+            pass
 
     def merge_metrics(self, counts: dict):
-        if not self.current_metrics:
-            self.current_metrics = counts.copy()
-            return self.current_metrics
-
         merged = self.current_metrics.copy()
 
         for key in ['total_active_jobs', 'total_jobs', 'minions_down_count']:
@@ -318,15 +318,31 @@ class SaltMetricsExporter:
             'value': total_minions - (minions_up_1 + minions_up_2)
         }
 
+        merged['minions_up_count'] = {
+            'value': minions_up_1 + minions_up_2
+        }
+
         merged['minion_job_duration'].extend(counts['minion_job_duration'])
         merged['minion_job_retcode'].extend(counts['minion_job_retcode'])
 
-        main_status_map = {item['minion']: item['value'] for item in merged.get('minion_status', [])}
+        main_status_map = {
+            item['minion']: {'value': item['value']}
+            for item in merged.get('minion_status', [])
+        }
+        counts_status_map = {
+            item['minion']: {'value': item['value']}
+            for item in counts.get('minion_status', [])
+        }
 
-        for minion_status in counts.get('minion_status', []):
-            main_value = main_status_map.get(minion_status['minion'])
-            if main_value is not None and minion_status['value'] != main_value:
-                minion_status['value'] = 1
+        for minion, counts_data in counts_status_map.items():
+            main_data = main_status_map.get(minion)
+            if main_data and counts_data['value'] != main_data['value']:
+                main_data['value'] = 1
+
+        merged['minion_status'] = [
+            {'minion': minion, 'value': data['value']}
+            for minion, data in main_status_map.items()
+        ]
         self.current_metrics = merged
         return merged
 
@@ -335,21 +351,25 @@ class SaltMetricsExporter:
         port = port or EXPORTER_PORT
         delay = delay or EXPORTER_COLLECT_DELAY
 
-        prom.start_http_server(port, addr=addr)
-
-        log.info(f"Server started on {addr}:{port}")
+        if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
+            prom.start_http_server(port, addr=addr)
+            log.info(f"Exporter started on {addr}:{port}")
 
         while True:
             counts = self.collect_data()
             if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
                 metrics = counts
-                if self.recieved_metrics:
-                    metrics = self.merge_metrics(metrics)
+                if self.recieved_metrics and self.current_metrics:
+                    metrics = self.merge_metrics(self.recieved_metrics)
+                elif self.recieved_metrics and not self.current_metrics:
+                    self.current_metrics = metrics
+                    metrics = self.merge_metrics(self.recieved_metrics)
                 self.update_metrics(metrics)
             elif not EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
                 self.send_data_to_main(counts)
             else:
                 self.update_metrics(counts)
+
             await asyncio.sleep(delay)
 
     async def run_receiver(self, addr: str = None, port: int = None):
@@ -364,7 +384,12 @@ class SaltMetricsExporter:
                     return jsonify({'error': 'No JSON received'}), 400
                 if sorted(data.keys()) != sorted(self.METRICS_INFO.keys()):
                     return jsonify({'error': 'Invalid metric data provided'}), 400
+                
                 self.recieved_metrics = data
+                if self.current_metrics:
+                    metrics = self.merge_metrics(self.recieved_metrics)
+                    self.update_metrics(metrics)
+                return jsonify({'success': 'Data added successfully'}), 200
 
             return app
         
@@ -408,11 +433,18 @@ if __name__ == '__main__':
             help='The delay between metrics updates.'
         )
         args = parser.parse_args()
+        log.info('===========================Startup info===========================')
+        log.info(f'Collect delay: {EXPORTER_COLLECT_DELAY} seconds')
+        log.info(f'Debug enabled: {EXPORTER_DEBUG}')
+        log.info(f'Is it main master?: {EXPORTER_MAIN_MASTER}')
+        log.info(f'Multimaster mode enabled: {EXPORTER_MULTIMASTER_ENABLED}')
+        log.info('==================================================================')
         exporter = SaltMetricsExporter()
         loop = asyncio.get_event_loop()
-        tasks = [exporter.run(args.addr, args.port, args.delay)]
+        tasks = []
         if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
             tasks.append(exporter.run_receiver(args.addr, args.rport))
+        tasks.append(exporter.run(args.addr, args.port, args.delay))
         loop.run_until_complete(asyncio.gather(*tasks))
     except KeyboardInterrupt:
         log.info('Server stopped by user.')

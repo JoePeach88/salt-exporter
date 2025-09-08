@@ -1,4 +1,10 @@
 [main]
-addr=
-port=
-collect_delay=
+addr=0.0.0.0
+collect_delay=300
+port=9111
+rport=9112
+main_master=True
+main_master_addr=
+multimaster_mode=False
+debug=False
+exclude_jobs=^runner.*
