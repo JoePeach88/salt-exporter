@@ -7,9 +7,13 @@ import argparse
 import traceback
 import gc
 import re
+import json
+import asyncio
+import requests
 from pathlib import Path
 from env import *
 from datetime import datetime
+from flask import Flask, request, jsonify
 
 
 def import_parents(level: int = 1):
@@ -107,6 +111,8 @@ class SaltMetricsExporter:
 
     def __init__(self):
         self.metrics = self._create_metrics()
+        self.current_metrics = {}
+        self.recieved_metrics = {}
 
     def _create_metrics(self):
         log.info("Creating metrics...")
@@ -116,11 +122,13 @@ class SaltMetricsExporter:
                 metric_type = meta.get('type', prom.Gauge)
                 name = meta.get('name')
                 desc = meta.get('desc')
+                mode = meta.get('mode', 'single')
                 labels = meta.get('labels', None)
                 metrics.update({
                     key: {
                         'metric': metric_type(name, desc, labelnames=labels if labels else ()),
-                        'type': 'labeled' if labels else 'not_labeled'
+                        'type': 'labeled' if labels else 'not_labeled',
+                        'mode': mode
                     }
                 })
             log.info('Metrics created.')
@@ -136,31 +144,37 @@ class SaltMetricsExporter:
         }
         try:
             log.info('Starting collecting data...')
+            log.info('Collecting minion statuses...')
             minion_statuses = salt_runner.cmd('manage.status', print_event=EXPORTER_DEBUG)
+            log.info('Collected.')
+            log.info('Collecting jobs...')
             job_list = salt_runner.cmd('jobs.list_jobs', kwarg={
                 'start_time': datetime.today().replace(hour=0, minute=0, second=0).strftime("%Y, %b %d %H:%M:%S"),
                 'end_time': datetime.today().replace(hour=23, minute=59, second=59).strftime("%Y, %b %d %H:%M:%S")
             }, print_event=EXPORTER_DEBUG)
             job_list = dict(sorted(job_list.items(), reverse=True))
+            log.info('Collected.')
+            log.info('Collecting active jobs...')
             active_jobs_list = salt_runner.cmd('jobs.active', print_event=EXPORTER_DEBUG)
+            log.info('Collected.')
             key_data = salt_key.list_keys()
             minions_up = minion_statuses.get('up', [])
             minions_down = minion_statuses.get('down', [])
-            log.info('Collecting down minions...')
+            log.info('Preparing down minions metric...')
             for minion in minions_down:
                 metrics['minion_status'].append({
                     'minion': minion,
                     'value': 0
                 })
-            log.info('Collected.')
-            log.info('Collecting up minions...')
+            log.info('Prepared.')
+            log.info('Preparing up minions metric...')
             for minion in minions_up:
                 metrics['minion_status'].append({
                     'minion': minion,
                     'value': 1
                 })
-            log.info('Collected.')
-            log.info('Collecting jobs...')
+            log.info('Prepared.')
+            log.info('Preparing jobs metrics...')
             all_minions = minions_up + minions_down
             for minion in all_minions:
                 last_job = [int(job_id) for job_id, details in job_list.items() if details.get('Target') == minion and not any(re.match(p, details.get('Function')) for p in EXPORTER_EXCLUDED_FUNCTIONS)]
@@ -198,10 +212,10 @@ class SaltMetricsExporter:
                         'fun': fun,
                         'value': job_result.get('retcode')
                     })
-            log.info('Collected.')
-            log.info('All data collected successfully!')
+            log.info('Prepared.')
+            log.info('All data collected and prepared successfully!')
         except Exception:
-            log.error(f'Something went wrong when trying to collect metrics data: {traceback.format_exc()}')
+            log.error(f'Something went wrong when trying to collect and prepare metrics data: {traceback.format_exc()}')
             minions_up = []
             minions_down = []
             job_list = {}
@@ -241,6 +255,7 @@ class SaltMetricsExporter:
         if EXPORTER_DEBUG:
             print(f'Collected metrics: {metrics}')
 
+        self.current_metrics = metrics
         return metrics
 
     def update_metrics(self, counts: dict):
@@ -258,12 +273,15 @@ class SaltMetricsExporter:
                 if metric is None:
                     continue
                 metric_obj = metric['metric']
-                metric_type = metric.get('type', 'not_labeled')
+                metric_type = metric['type']
+                metric_mode = metric['mode']
                 if metric_type == 'not_labeled':
                     _set_or_observe(metric_obj, value['value'])
                 else:
+                    if metric_mode == 'single':
+                        metric_obj.clear()
                     for metric_data in value:
-                        labels = {k: v for k, v in metric_data.items() if k != 'value'}
+                        labels = {k: v for k, v in metric_data.items() if k not in ('value')}
                         val = metric_data['value']
                         labeled_metric = metric_obj.labels(**labels)
                         _set_or_observe(labeled_metric, val)
@@ -271,13 +289,100 @@ class SaltMetricsExporter:
         except Exception:
             log.error(f'Something went wrong when trying to update metrics data: {traceback.format_exc()}')
 
-    def run(self, addr: str = None, port: int = None, delay: int = None):
-        server = prom.start_http_server(port if port else EXPORTER_PORT, addr=addr if addr else EXPORTER_ADDR)
-        log.info(f"Server started on {':'.join(str(x) for x in server[0].server_address)}")
+    def send_data_to_main(self, counts: dict):
+        import socket
+        _headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"slave_master_{socket.gethostname().split('.')[0]}"
+        }
+        response = requests.post(f'{EXPORTER_MAIN_MASTER}:{EXPORTER_RECIEVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
+        log.info(f'Data sent to main master server, response: {response.status_code} - {response.text}')
+
+    def merge_metrics(self, counts: dict):
+        if not self.current_metrics:
+            self.current_metrics = counts.copy()
+            return self.current_metrics
+
+        merged = self.current_metrics.copy()
+
+        for key in ['total_active_jobs', 'total_jobs', 'minions_down_count']:
+            val1 = merged.get(key, {}).get('value', 0)
+            val2 = counts.get(key, {}).get('value', 0)
+            merged[key] = {'value': val1 + val2}
+
+        total_minions = merged.get('total_minions_count', {}).get('value', 0)
+        minions_up_1 = merged.get('minions_up_count', {}).get('value', 0)
+        minions_up_2 = counts.get('minions_up_count', {}).get('value', 0)
+
+        merged['minions_down_count'] = {
+            'value': total_minions - (minions_up_1 + minions_up_2)
+        }
+
+        merged['minion_job_duration'].extend(counts['minion_job_duration'])
+        merged['minion_job_retcode'].extend(counts['minion_job_retcode'])
+
+        main_status_map = {item['minion']: item['value'] for item in merged.get('minion_status', [])}
+
+        for minion_status in counts.get('minion_status', []):
+            main_value = main_status_map.get(minion_status['minion'])
+            if main_value is not None and minion_status['value'] != main_value:
+                minion_status['value'] = 1
+        self.current_metrics = merged
+        return merged
+
+    async def run(self, addr: str = None, port: int = None, delay: int = None):
+        addr = addr or EXPORTER_ADDR
+        port = port or EXPORTER_PORT
+        delay = delay or EXPORTER_COLLECT_DELAY
+
+        prom.start_http_server(port, addr=addr)
+
+        log.info(f"Server started on {addr}:{port}")
+
         while True:
             counts = self.collect_data()
-            self.update_metrics(counts)
-            time.sleep(delay if delay else EXPORTER_COLLECT_DELAY)
+            if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
+                metrics = counts
+                if self.recieved_metrics:
+                    metrics = self.merge_metrics(metrics)
+                self.update_metrics(metrics)
+            elif not EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
+                self.send_data_to_main(counts)
+            else:
+                self.update_metrics(counts)
+            await asyncio.sleep(delay)
+
+    async def run_receiver(self, addr: str = None, port: int = None):
+
+        def create_flask_app():
+            app = Flask(__name__)
+
+            @app.route('/', methods=['POST'])
+            def handle_post():
+                data = request.get_json()
+                if not data:
+                    return jsonify({'error': 'No JSON received'}), 400
+                if sorted(data.keys()) != sorted(self.METRICS_INFO.keys()):
+                    return jsonify({'error': 'Invalid metric data provided'}), 400
+                self.recieved_metrics = data
+
+            return app
+        
+        addr = addr or EXPORTER_ADDR
+        port = port or EXPORTER_RECIEVER_PORT
+
+        app = create_flask_app()
+
+        from threading import Thread
+
+        def run_flask():
+            app.run(host=addr, port=port, debug=EXPORTER_DEBUG)
+
+        thread = Thread(target=run_flask, daemon=True)
+        thread.start()
+        log.info(f"Receiver server started on {addr}:{port}")
+        while thread.is_alive():
+            await asyncio.sleep(1)
 
 
 if __name__ == '__main__':
@@ -293,12 +398,21 @@ if __name__ == '__main__':
             help='The port where the server will operate.'
         )
         parser.add_argument(
+            '--rport',
+            type=int,
+            help='The port where the receiver server will operate.'
+        )
+        parser.add_argument(
             '--delay',
             type=int,
             help='The delay between metrics updates.'
         )
         args = parser.parse_args()
         exporter = SaltMetricsExporter()
-        exporter.run(args.addr, args.port, args.delay)
+        loop = asyncio.get_event_loop()
+        tasks = [exporter.run(args.addr, args.port, args.delay)]
+        if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
+            tasks.append(exporter.run_receiver(args.addr, args.rport))
+        loop.run_until_complete(asyncio.gather(*tasks))
     except KeyboardInterrupt:
         log.info('Server stopped by user.')

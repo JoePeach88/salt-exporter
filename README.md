@@ -17,6 +17,36 @@ This exporter scraping data from salt-masters.
 - `salt_rejected_minions_total` - Total rejected minions count.
 - `salt_unaccepted_minions_total` - Total unaccepted minions count.
 
+## Arch
+
+```mermaid
+---
+title: Схема работы сбора метрик в режиме multimaster
+---
+flowchart LR
+  subgraph slave_master1[master 1]
+    collector_slave1[collector]
+  end
+
+  subgraph slave_master2[master 2]
+    collector_slave2[collector]
+  end
+
+  subgraph slave_master3[master n]
+    collector_slave3[collector]
+  end
+
+  subgraph main_master
+    collector_master[collector]
+    metric_server
+    receiver
+  end
+
+  collector_slave1 & collector_slave2 & collector_slave3--"POST tcp/9112 (send metrics)"-->receiver
+  receiver--"merge metrics"-->collector_master
+  collector_master-->metric_server
+```
+
 ## Install
 
 1. Copy repo via:
