@@ -298,7 +298,7 @@ class SaltMetricsExporter:
         }
         try:
             response = requests.post(f'http://{EXPORTER_MAIN_MASTER_ADDR}:{EXPORTER_RECIEVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
-            log.info(f'Data sent to main master server, response: {response.status_code} - {response.text}')
+            log.info(f'Data sent to main master server {EXPORTER_MAIN_MASTER_ADDR}, response: {response.status_code} - {response.text}')
         except:
             pass
 
@@ -337,13 +337,12 @@ class SaltMetricsExporter:
         for minion, counts_data in counts_status_map.items():
             main_data = main_status_map.get(minion)
             if main_data and counts_data['value'] != main_data['value']:
-                main_data['value'] = 1
+                main_status_map[minion]['value'] = 1
 
         merged['minion_status'] = [
             {'minion': minion, 'value': data['value']}
             for minion, data in main_status_map.items()
         ]
-        self.current_metrics = merged
         return merged
 
     async def run(self, addr: str = None, port: int = None, delay: int = None):

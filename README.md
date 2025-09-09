@@ -2,5 +2,5 @@
 
 - [`English`](./docs/EN.md)
 
-- [`Russian`](./docs/EN.md)
+- [`Russian`](./docs/RU.md)
 
