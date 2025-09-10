@@ -112,7 +112,7 @@ class SaltMetricsExporter:
     def __init__(self):
         self.metrics = self._create_metrics()
         self.current_metrics = {}
-        self.recieved_metrics = {}
+        self.received_metrics = {}
 
     def _create_metrics(self):
         log.info("Creating metrics...")
@@ -297,8 +297,8 @@ class SaltMetricsExporter:
             "User-Agent": f"slave_master_{socket.gethostname().split('.')[0]}"
         }
         try:
-            response = requests.post(f'http://{EXPORTER_MAIN_MASTER_ADDR}:{EXPORTER_RECIEVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
-            log.info(f'Data sent to main master server, response: {response.status_code} - {response.text}')
+            response = requests.post(f'http://{EXPORTER_MAIN_MASTER_ADDR}:{EXPORTER_RECEIVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
+            log.info(f'Data sent to main master server {EXPORTER_MAIN_MASTER_ADDR}, response: {response.status_code} - {response.text}')
         except:
             pass
 
@@ -337,13 +337,12 @@ class SaltMetricsExporter:
         for minion, counts_data in counts_status_map.items():
             main_data = main_status_map.get(minion)
             if main_data and counts_data['value'] != main_data['value']:
-                main_data['value'] = 1
+                main_status_map[minion]['value'] = 1
 
         merged['minion_status'] = [
             {'minion': minion, 'value': data['value']}
             for minion, data in main_status_map.items()
         ]
-        self.current_metrics = merged
         return merged
 
     async def run(self, addr: str = None, port: int = None, delay: int = None):
@@ -359,11 +358,11 @@ class SaltMetricsExporter:
             counts = self.collect_data()
             if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
                 metrics = counts
-                if self.recieved_metrics and self.current_metrics:
-                    metrics = self.merge_metrics(self.recieved_metrics)
-                elif self.recieved_metrics and not self.current_metrics:
+                if self.received_metrics and self.current_metrics:
+                    metrics = self.merge_metrics(self.received_metrics)
+                elif self.received_metrics and not self.current_metrics:
                     self.current_metrics = metrics
-                    metrics = self.merge_metrics(self.recieved_metrics)
+                    metrics = self.merge_metrics(self.received_metrics)
                 self.update_metrics(metrics)
             elif not EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
                 self.send_data_to_main(counts)
@@ -385,16 +384,16 @@ class SaltMetricsExporter:
                 if sorted(data.keys()) != sorted(self.METRICS_INFO.keys()):
                     return jsonify({'error': 'Invalid metric data provided'}), 400
                 
-                self.recieved_metrics = data
+                self.received_metrics = data
                 if self.current_metrics:
-                    metrics = self.merge_metrics(self.recieved_metrics)
+                    metrics = self.merge_metrics(self.received_metrics)
                     self.update_metrics(metrics)
                 return jsonify({'success': 'Data added successfully'}), 200
 
             return app
         
         addr = addr or EXPORTER_ADDR
-        port = port or EXPORTER_RECIEVER_PORT
+        port = port or EXPORTER_RECEIVER_PORT
 
         app = create_flask_app()
 
@@ -434,10 +433,15 @@ if __name__ == '__main__':
         )
         args = parser.parse_args()
         log.info('===========================Startup info===========================')
+        log.info(f'Metrics server addr: {EXPORTER_ADDR}')
+        log.info(f'Metrics server port: tcp/{EXPORTER_PORT}')
+        log.info(f'Receiver server port: tcp/{EXPORTER_RECEIVER_PORT}')
         log.info(f'Collect delay: {EXPORTER_COLLECT_DELAY} seconds')
         log.info(f'Debug enabled: {EXPORTER_DEBUG}')
         log.info(f'Is it main master?: {EXPORTER_MAIN_MASTER}')
+        log.info(f'Main master addr: {EXPORTER_MAIN_MASTER_ADDR}')
         log.info(f'Multimaster mode enabled: {EXPORTER_MULTIMASTER_ENABLED}')
+        log.info(f'Excluded functions: {EXPORTER_EXCLUDED_FUNCTIONS}')
         log.info('==================================================================')
         exporter = SaltMetricsExporter()
         loop = asyncio.get_event_loop()
