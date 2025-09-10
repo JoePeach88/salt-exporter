@@ -299,7 +299,7 @@ class SaltMetricsExporter:
         try:
             response = requests.post(f'http://{EXPORTER_MAIN_MASTER_ADDR}:{EXPORTER_RECEIVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
             log.info(f'Data sent to main master server {EXPORTER_MAIN_MASTER_ADDR}, response: {response.status_code} - {response.text}')
-        except:
+        except Exception:
             pass
 
     def merge_metrics(self, counts: dict):
@@ -383,7 +383,7 @@ class SaltMetricsExporter:
                     return jsonify({'error': 'No JSON received'}), 400
                 if sorted(data.keys()) != sorted(self.METRICS_INFO.keys()):
                     return jsonify({'error': 'Invalid metric data provided'}), 400
-                
+
                 self.received_metrics = data
                 if self.current_metrics:
                     metrics = self.merge_metrics(self.received_metrics)
@@ -391,7 +391,7 @@ class SaltMetricsExporter:
                 return jsonify({'success': 'Data added successfully'}), 200
 
             return app
-        
+
         addr = addr or EXPORTER_ADDR
         port = port or EXPORTER_RECEIVER_PORT
 
