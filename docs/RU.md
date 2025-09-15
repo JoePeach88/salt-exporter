@@ -106,7 +106,7 @@ systemctl daemon-reload & systemctl enable --now salt-master-exporter.service
 
 ## Конфигурация
 
-1. Откройте конфигурационный файл: /opt/saltstack/exporters/master_exporter/exporter
+1. Откройте конфигурационный файл: `/opt/saltstack/exporters/master_exporter/exporter`
 
 2. Отредактируйте настройки:
 

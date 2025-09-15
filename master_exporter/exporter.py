@@ -10,6 +10,7 @@ import re
 import json
 import asyncio
 import requests
+import subprocess
 from pathlib import Path
 from env import *
 from datetime import datetime
@@ -40,6 +41,14 @@ log.addHandler(handler)
 gc.enable()
 gc.set_debug(0)
 gc.set_threshold(700, 10, 10)
+
+
+def check_reachable(host: str):
+    return subprocess.call(f"ping -c 1 {host}".split(' '), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
+
+def check_port(host: str, port: int):
+    return subprocess.call(f"nc -zv {host} {port}".split(' '), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0  
 
 
 class SaltMetricsExporter:
@@ -300,7 +309,7 @@ class SaltMetricsExporter:
             response = requests.post(f'http://{EXPORTER_MAIN_MASTER_ADDR}:{EXPORTER_RECEIVER_PORT}', headers=_headers, data=json.dumps(counts), verify=False)
             log.info(f'Data sent to main master server {EXPORTER_MAIN_MASTER_ADDR}, response: {response.status_code} - {response.text}')
         except Exception:
-            pass
+            log.error(f'Something went wrong when trying to sent metrics data to main master server: {traceback.format_exc()}')
 
     def merge_metrics(self, counts: dict):
         merged = self.current_metrics.copy()
@@ -364,7 +373,7 @@ class SaltMetricsExporter:
                     self.current_metrics = metrics
                     metrics = self.merge_metrics(self.received_metrics)
                 self.update_metrics(metrics)
-            elif not EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
+            elif not EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED and (check_reachable(EXPORTER_MAIN_MASTER_ADDR) and check_port(EXPORTER_MAIN_MASTER_ADDR, EXPORTER_RECEIVER_PORT)):
                 self.send_data_to_main(counts)
             else:
                 self.update_metrics(counts)
@@ -440,6 +449,7 @@ if __name__ == '__main__':
         log.info(f'Debug enabled: {EXPORTER_DEBUG}')
         log.info(f'Is it main master?: {EXPORTER_MAIN_MASTER}')
         log.info(f'Main master addr: {EXPORTER_MAIN_MASTER_ADDR}')
+        log.info(f'Main master reachable: {check_reachable(EXPORTER_MAIN_MASTER_ADDR)}')
         log.info(f'Multimaster mode enabled: {EXPORTER_MULTIMASTER_ENABLED}')
         log.info(f'Excluded functions: {EXPORTER_EXCLUDED_FUNCTIONS}')
         log.info('==================================================================')
