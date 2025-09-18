@@ -34,6 +34,7 @@ def import_parents(level: int = 1):
 import_parents(2)
 from ..modules.salt_master_local_client import salt_runner, salt_key, salt_print_job, salt_list_jobs
 __virtualname__ = "salt_master_metrics"
+__version__ = '1.00'
 log = logging.getLogger(__name__)
 formatter = logging.Formatter(fmt="%(message)s")
 handler = logging.StreamHandler(stream=sys.stdout)
@@ -460,6 +461,7 @@ if __name__ == '__main__':
         )
         args = parser.parse_args()
         log.info('===========================Startup info===========================')
+        log.info(f'SaltStack Metrics Exporter v.{__version__}')
         log.info(f'Metrics server addr: {EXPORTER_ADDR}')
         log.info(f'Metrics server port: tcp/{EXPORTER_PORT}')
         log.info(f'Receiver server port: tcp/{EXPORTER_RECEIVER_PORT}')
