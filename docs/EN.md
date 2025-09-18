@@ -36,7 +36,7 @@ flowchart LR
 
 ```mermaid
 ---
-title: Multi-master
+title: Multi-master (without syndic)
 ---
 flowchart LR
   subgraph slave_master1[master 1]
@@ -62,6 +62,8 @@ flowchart LR
   collector_master--metrics_data-->metric_server
   metric_server-->expose_metrics[tcp/9111]
 ```
+
+⚠️ **Multi-master mode should only be used if there is no syndic configured on the masters, if there are syndics, then the exporter must be deployed only on the main master**
 
 ## Install
 
@@ -118,6 +120,7 @@ main_master_addr=
 multimaster_mode=
 debug=
 exclude_jobs=
+include_jobs=
 ```
 
 - `addr` - The address where the server will operate (default: `0.0.0.0`).
@@ -137,6 +140,58 @@ exclude_jobs=
 - `debug` - Launch exporter in debug mode (default: `False`).
 
 - `exclude_jobs` - Which jobs excluded from parse in duration and retcode (supports regex).
+
+- `include_jobs` -  - Which jobs included for parse in duration and retcode (supports regex).
+
+### Configuration for single master/multiple masters with syndic
+
+```ini
+[main]
+addr=0.0.0.0
+collect_delay=300
+port=9111
+rport=9112
+main_master=True
+main_master_addr=localhost
+multimaster_mode=False
+debug=False
+exclude_jobs=
+include_jobs=^state\..*
+```
+
+### Configuration for multiple masters (without syndic)
+
+**Main master:**
+
+```ini
+[main]
+addr=0.0.0.0
+collect_delay=300
+port=9111
+rport=9112
+main_master=True
+main_master_addr=prod-main-salt-master.local.domain
+multimaster_mode=True
+debug=False
+exclude_jobs=
+include_jobs=^state\..*
+```
+
+**Other masters:**
+
+```ini
+[main]
+addr=0.0.0.0
+collect_delay=300
+port=9111
+rport=9112
+main_master=False
+main_master_addr=prod-main-salt-master.local.domain
+multimaster_mode=True
+debug=False
+exclude_jobs=
+include_jobs=^state\..*
+```
 
 ## Preview
 

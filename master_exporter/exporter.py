@@ -15,6 +15,7 @@ from pathlib import Path
 from env import *
 from datetime import datetime
 from flask import Flask, request, jsonify
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def import_parents(level: int = 1):
@@ -31,7 +32,7 @@ def import_parents(level: int = 1):
 
 
 import_parents(2)
-from ..modules.salt_master_local_client import salt_runner, salt_key
+from ..modules.salt_master_local_client import salt_runner, salt_key, salt_print_job, salt_list_jobs
 __virtualname__ = "salt_master_metrics"
 log = logging.getLogger(__name__)
 formatter = logging.Formatter(fmt="%(message)s")
@@ -48,7 +49,7 @@ def check_reachable(host: str):
 
 
 def check_port(host: str, port: int):
-    return subprocess.call(f"nc -zv {host} {port}".split(' '), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0  
+    return subprocess.call(f"nc -zv {host} {port}".split(' '), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 
 class SaltMetricsExporter:
@@ -157,10 +158,9 @@ class SaltMetricsExporter:
             minion_statuses = salt_runner.cmd('manage.status', print_event=EXPORTER_DEBUG)
             log.info('Collected.')
             log.info('Collecting jobs...')
-            job_list = salt_runner.cmd('jobs.list_jobs', kwarg={
-                'start_time': datetime.today().replace(hour=0, minute=0, second=0).strftime("%Y, %b %d %H:%M:%S"),
-                'end_time': datetime.today().replace(hour=23, minute=59, second=59).strftime("%Y, %b %d %H:%M:%S")
-            }, print_event=EXPORTER_DEBUG)
+            job_list = salt_list_jobs(start_time=datetime.today().replace(hour=0, minute=0, second=0).strftime("%Y, %b %d %H:%M:%S"),
+                                      end_time=datetime.today().replace(hour=23, minute=59, second=59).strftime("%Y, %b %d %H:%M:%S")
+                                      )
             job_list = dict(sorted(job_list.items(), reverse=True))
             log.info('Collected.')
             log.info('Collecting active jobs...')
@@ -183,90 +183,102 @@ class SaltMetricsExporter:
                     'value': 1
                 })
             log.info('Prepared.')
-            log.info('Preparing jobs metrics...')
             all_minions = minions_up + minions_down
-            for minion in all_minions:
-                last_job = [int(job_id) for job_id, details in job_list.items() if details.get('Target') == minion and not any(re.match(p, details.get('Function')) for p in EXPORTER_EXCLUDED_FUNCTIONS)]
+
+            def process_minion(minion):
+                last_job = [int(job_id) for job_id, details in job_list.items()
+                            if details.get('Target') == minion and not any(re.match(p, details.get('Function')) for p in EXPORTER_EXCLUDED_FUNCTIONS) and any(re.match(p, details.get('Function')) for p in EXPORTER_INCLUDED_FUNCTIONS)]
                 if not last_job:
-                    continue
+                    return None
+
                 last_job = max(last_job)
-                last_job_details = salt_runner.cmd('jobs.print_job', [last_job], print_event=EXPORTER_DEBUG)
+                last_job_details = salt_print_job(last_job)
 
-                if last_job_details:
-                    job_data = last_job_details[next(iter(last_job_details))]
-                    fun = job_data.get('Function')
-                    job_result = job_data.get('Result', {}).get(minion, {})
+                if not last_job_details:
+                    return None
 
-                    if not isinstance(job_result, dict) or not job_result:
-                        continue
+                job_data = last_job_details[next(iter(last_job_details))]
+                fun = job_data.get('Function')
+                job_result = job_data.get('Result', {}).get(minion, {})
 
-                    if any(re.match(p, fun) for p in EXPORTER_EXCLUDED_FUNCTIONS):
-                        continue
+                if not isinstance(job_result, dict) or not job_result:
+                    return None
 
-                    job_duration = 0
-                    job_return = job_result.get('return')
-                    if isinstance(job_return, dict):
-                        for job_data in job_return.values():
-                            if isinstance(job_data, dict):
-                                job_duration += job_data.get('duration')
+                if any(re.match(p, fun) for p in EXPORTER_EXCLUDED_FUNCTIONS):
+                    return None
 
-                    metrics['minion_job_duration'].append({
-                        'master': socket.gethostname(),
+                job_duration = 0
+                job_return = job_result.get('return')
+                if isinstance(job_return, dict):
+                    for job_data_val in job_return.values():
+                        if isinstance(job_data_val, dict):
+                            job_duration += job_data_val.get('duration', 0)
+
+                master_hostname = socket.gethostname()
+
+                return {
+                    'job_duration': {
+                        'master': master_hostname,
                         'minion': minion,
                         'jid': last_job,
                         'fun': fun,
                         'value': job_duration / 1000
-                    })
-                    metrics['minion_job_retcode'].append({
-                        'master': socket.gethostname(),
+                    },
+                    'job_retcode': {
+                        'master': master_hostname,
                         'minion': minion,
                         'fun': fun,
                         'value': job_result.get('retcode')
-                    })
+                    }
+                }
+
+            log.info('Preparing jobs metrics...')
+            with ThreadPoolExecutor(max_workers=25) as executor:
+                futures = {executor.submit(process_minion, minion): minion for minion in all_minions}
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        metrics['minion_job_duration'].append(result['job_duration'])
+                        metrics['minion_job_retcode'].append(result['job_retcode'])
             log.info('Prepared.')
             log.info('All data collected and prepared successfully!')
+            metrics.update({
+                'total_jobs': {
+                    'value': len(job_list)
+                },
+                'total_active_jobs': {
+                    'value': len(active_jobs_list)
+                },
+                'minions_up_count': {
+                    'value': len(minions_up)
+                },
+                'minions_down_count': {
+                    'value': len(minions_down)
+                },
+                'total_minions_count': {
+                    'value': len(minions_up) + len(minions_down)
+                },
+                'accepted_minions_count': {
+                    'value': len(key_data.get('minions', []))
+                },
+                'denied_minions_count': {
+                    'value': len(key_data.get('minions_denied', []))
+                },
+                'rejected_minions_count': {
+                    'value': len(key_data.get('minions_rejected', []))
+                },
+                'unaccepted_minions_count': {
+                    'value': len(key_data.get('minions_pre', []))
+                }
+            })
         except Exception:
             log.error(f'Something went wrong when trying to collect and prepare metrics data: {traceback.format_exc()}')
-            minions_up = []
-            minions_down = []
-            job_list = {}
-            active_jobs_list = []
-            key_data = {}
-
-        metrics.update({
-            'total_jobs': {
-                'value': len(job_list)
-            },
-            'total_active_jobs': {
-                'value': len(active_jobs_list)
-            },
-            'minions_up_count': {
-                'value': len(minions_up)
-            },
-            'minions_down_count': {
-                'value': len(minions_down)
-            },
-            'total_minions_count': {
-                'value': len(minions_up) + len(minions_down)
-            },
-            'accepted_minions_count': {
-                'value': len(key_data.get('minions', []))
-            },
-            'denied_minions_count': {
-                'value': len(key_data.get('minions_denied', []))
-            },
-            'rejected_minions_count': {
-                'value': len(key_data.get('minions_rejected', []))
-            },
-            'unaccepted_minions_count': {
-                'value': len(key_data.get('minions_pre', []))
-            }
-        })
+            if self.current_metrics:
+                metrics = self.current_metrics
 
         if EXPORTER_DEBUG:
             print(f'Collected metrics: {metrics}')
 
-        self.current_metrics = metrics
         return metrics
 
     def update_metrics(self, counts: dict):
@@ -311,17 +323,17 @@ class SaltMetricsExporter:
         except Exception:
             log.error(f'Something went wrong when trying to sent metrics data to main master server: {traceback.format_exc()}')
 
-    def merge_metrics(self, counts: dict):
-        merged = self.current_metrics.copy()
+    def merge_metrics(self, main: dict, received: dict):
+        merged = main.copy()
 
         for key in ['total_active_jobs', 'total_jobs', 'minions_down_count']:
             val1 = merged.get(key, {}).get('value', 0)
-            val2 = counts.get(key, {}).get('value', 0)
+            val2 = received.get(key, {}).get('value', 0)
             merged[key] = {'value': val1 + val2}
 
         total_minions = merged.get('total_minions_count', {}).get('value', 0)
         minions_up_1 = merged.get('minions_up_count', {}).get('value', 0)
-        minions_up_2 = counts.get('minions_up_count', {}).get('value', 0)
+        minions_up_2 = received.get('minions_up_count', {}).get('value', 0)
 
         merged['minions_down_count'] = {
             'value': total_minions - (minions_up_1 + minions_up_2)
@@ -331,8 +343,8 @@ class SaltMetricsExporter:
             'value': minions_up_1 + minions_up_2
         }
 
-        merged['minion_job_duration'].extend(counts['minion_job_duration'])
-        merged['minion_job_retcode'].extend(counts['minion_job_retcode'])
+        merged['minion_job_duration'].extend(received['minion_job_duration'])
+        merged['minion_job_retcode'].extend(received['minion_job_retcode'])
 
         main_status_map = {
             item['minion']: {'value': item['value']}
@@ -340,7 +352,7 @@ class SaltMetricsExporter:
         }
         counts_status_map = {
             item['minion']: {'value': item['value']}
-            for item in counts.get('minion_status', [])
+            for item in received.get('minion_status', [])
         }
 
         for minion, counts_data in counts_status_map.items():
@@ -365,16 +377,22 @@ class SaltMetricsExporter:
 
         while True:
             counts = self.collect_data()
-            if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
-                metrics = counts
-                if self.received_metrics and self.current_metrics:
-                    metrics = self.merge_metrics(self.received_metrics)
-                elif self.received_metrics and not self.current_metrics:
-                    self.current_metrics = metrics
-                    metrics = self.merge_metrics(self.received_metrics)
-                self.update_metrics(metrics)
-            elif not EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED and (check_reachable(EXPORTER_MAIN_MASTER_ADDR) and check_port(EXPORTER_MAIN_MASTER_ADDR, EXPORTER_RECEIVER_PORT)):
-                self.send_data_to_main(counts)
+            if EXPORTER_MULTIMASTER_ENABLED:
+                if EXPORTER_MAIN_MASTER:
+                    metrics = counts
+                    if self.received_metrics:
+                        metrics = self.merge_metrics(metrics, self.received_metrics)
+                        if not self.current_metrics:
+                            self.current_metrics = counts
+                    self.update_metrics(metrics)
+                    self.current_metrics = counts
+                else:
+                    main_reachable = check_reachable(EXPORTER_MAIN_MASTER_ADDR)
+                    port_open = check_port(EXPORTER_MAIN_MASTER_ADDR, EXPORTER_RECEIVER_PORT)
+                    if main_reachable and port_open:
+                        self.send_data_to_main(counts)
+                    else:
+                        self.update_metrics(counts)
             else:
                 self.update_metrics(counts)
 
@@ -395,7 +413,7 @@ class SaltMetricsExporter:
 
                 self.received_metrics = data
                 if self.current_metrics:
-                    metrics = self.merge_metrics(self.received_metrics)
+                    metrics = self.merge_metrics(self.current_metrics, self.received_metrics)
                     self.update_metrics(metrics)
                 return jsonify({'success': 'Data added successfully'}), 200
 
@@ -451,6 +469,7 @@ if __name__ == '__main__':
         log.info(f'Main master addr: {EXPORTER_MAIN_MASTER_ADDR}')
         log.info(f'Main master reachable: {check_reachable(EXPORTER_MAIN_MASTER_ADDR)}')
         log.info(f'Multimaster mode enabled: {EXPORTER_MULTIMASTER_ENABLED}')
+        log.info(f'Included functions: {EXPORTER_INCLUDED_FUNCTIONS}')
         log.info(f'Excluded functions: {EXPORTER_EXCLUDED_FUNCTIONS}')
         log.info('==================================================================')
         exporter = SaltMetricsExporter()

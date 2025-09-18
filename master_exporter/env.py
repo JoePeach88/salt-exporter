@@ -17,6 +17,10 @@ EXPORTER_EXCLUDED_FUNCTIONS = os.getenv('EXPORTER_EXCLUDED_FUNCTIONS').split(','
 [
     '^runner.*'
 ])
+EXPORTER_INCLUDED_FUNCTIONS = os.getenv('EXPORTER_INCLUDED_FUNCTIONS').split(',') if os.getenv('EXPORTER_INCLUDED_FUNCTIONS') else (config.get('main', 'include_jobs').split(',') if config_exists and config.has_option('main', 'include_jobs') else 
+[
+    '*'
+])
 EXPORTER_MAIN_MASTER = os.getenv('EXPORTER_MAIN_MASTER') == 'True' if os.getenv('EXPORTER_MAIN_MASTER') else (config.get('main', 'main_master') == 'True' if config_exists and config.has_option('main', 'main_master') else True)
 EXPORTER_MAIN_MASTER_ADDR = os.getenv('EXPORTER_MAIN_MASTER_ADDR') if os.getenv('EXPORTER_MAIN_MASTER_ADDR') else (config.get('main', 'main_master_addr') if config_exists and config.has_option('main', 'main_master_addr') else '0.0.0.0')
 EXPORTER_MULTIMASTER_ENABLED = os.getenv('EXPORTER_MULTIMASTER_ENABLED') == 'True' if os.getenv('EXPORTER_MULTIMASTER_ENABLED') else (config.get('main', 'multimaster_mode') == 'True' if config_exists and config.has_option('main', 'multimaster_mode') else False)

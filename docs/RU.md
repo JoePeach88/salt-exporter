@@ -36,7 +36,7 @@ flowchart LR
 
 ```mermaid
 ---
-title: Multi-master
+title: Multi-master (Без синдика)
 ---
 flowchart LR
   subgraph slave_master1[мастер 1]
@@ -62,6 +62,8 @@ flowchart LR
   collector_master--metrics_data-->metric_server
   metric_server-->expose_metrics[tcp/9111]
 ```
+
+⚠️ **Режим multi-master необходимо использовать только в том случае, если на мастерах не настроен синдик, в случае же если синдики есть, то необходимо развернуть экспортер только на главном мастере**
 
 ## Установка
 
@@ -121,6 +123,7 @@ main_master_addr=
 multimaster_mode=
 debug=
 exclude_jobs=
+include_jobs=
 ```
 
 - `addr` — Адрес, на котором будет работать сервер (по умолчанию: 0.0.0.0).
@@ -140,6 +143,58 @@ exclude_jobs=
 - `debug` — Запуск экспортера в режиме отладки (по умолчанию: False).
 
 - `exclude_jobs` — Задачи, исключённые из парсинга по длительности и коду возврата (поддерживает regex).
+
+- `include_jobs` — Задачи, включенные в парсинг по длительности и коду возврата (поддерживает regex).
+
+### Конфигурация для одного мастера/нескольких мастеров с синдиком
+
+```ini
+[main]
+addr=0.0.0.0
+collect_delay=300
+port=9111
+rport=9112
+main_master=True
+main_master_addr=localhost
+multimaster_mode=False
+debug=False
+exclude_jobs=
+include_jobs=^state\..*
+```
+
+### Конфигурация для нескольких мастеров (без синдика)
+
+**Основной мастер:**
+
+```ini
+[main]
+addr=0.0.0.0
+collect_delay=300
+port=9111
+rport=9112
+main_master=True
+main_master_addr=prod-main-salt-master.local.domain
+multimaster_mode=True
+debug=False
+exclude_jobs=
+include_jobs=^state\..*
+```
+
+**Остальные мастера:**
+
+```ini
+[main]
+addr=0.0.0.0
+collect_delay=300
+port=9111
+rport=9112
+main_master=False
+main_master_addr=prod-main-salt-master.local.domain
+multimaster_mode=True
+debug=False
+exclude_jobs=
+include_jobs=^state\..*
+```
 
 ## Просмотр
 
