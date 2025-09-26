@@ -63,6 +63,33 @@ flowchart LR
   metric_server-->expose_metrics[tcp/9111]
 ```
 
+```mermaid
+---
+title: Multi-master (with syndic)
+---
+flowchart TD
+  subgraph slave_master1[master 1]
+    syndic_slave1[syndic]
+  end
+
+  subgraph slave_master2[master 2]
+    syndic_slave2[syndic]
+  end
+
+  subgraph slave_master3[master n]
+    syndic_slave3[syndic]
+  end
+
+  subgraph main_master
+    collector_master[collector]
+    metric_server
+  end
+
+  syndic_slave1 & syndic_slave2 & syndic_slave3--"send pub"-->main_master
+  collector_master--metrics_data-->metric_server
+  metric_server-->expose_metrics[tcp/9111]
+```
+
 ⚠️ **Multi-master mode should only be used if there is no syndic configured on the masters, if there are syndics, then the exporter must be deployed only on the main master like in a single master mode.**
 
 ## Documentation
@@ -73,4 +100,4 @@ flowchart LR
 
 ## Changelogs
 
-- [1.00](./changelogs/1.00.md)
+- [1.x](./changelogs/1.x.md)

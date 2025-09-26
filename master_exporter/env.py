@@ -1,4 +1,6 @@
 import os
+import re
+import socket
 import configparser
 from pathlib import Path
 
@@ -24,3 +26,6 @@ EXPORTER_INCLUDED_FUNCTIONS = os.getenv('EXPORTER_INCLUDED_FUNCTIONS').split(','
 EXPORTER_MAIN_MASTER = os.getenv('EXPORTER_MAIN_MASTER') == 'True' if os.getenv('EXPORTER_MAIN_MASTER') else (config.get('main', 'main_master') == 'True' if config_exists and config.has_option('main', 'main_master') else True)
 EXPORTER_MAIN_MASTER_ADDR = os.getenv('EXPORTER_MAIN_MASTER_ADDR') if os.getenv('EXPORTER_MAIN_MASTER_ADDR') else (config.get('main', 'main_master_addr') if config_exists and config.has_option('main', 'main_master_addr') else '0.0.0.0')
 EXPORTER_MULTIMASTER_ENABLED = os.getenv('EXPORTER_MULTIMASTER_ENABLED') == 'True' if os.getenv('EXPORTER_MULTIMASTER_ENABLED') else (config.get('main', 'multimaster_mode') == 'True' if config_exists and config.has_option('main', 'multimaster_mode') else False)
+EXCLUDED_PATTERNS = [re.compile(p) for p in EXPORTER_EXCLUDED_FUNCTIONS]
+INCLUDED_PATTERNS = [re.compile(p) for p in EXPORTER_INCLUDED_FUNCTIONS]
+MASTER_HOSTNAME = socket.gethostname()
