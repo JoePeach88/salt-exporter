@@ -1,0 +1,13 @@
+[Unit]
+Description=SaltStack Prometheus Exporter
+Documentation=https://github.com/JoePeach88/salt-exporter
+
+[Service]
+Type=simple
+ExecStart=/opt/saltstack/salt/bin/python3 /opt/saltstack/exporters/salt-exporter/exporter.py
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
