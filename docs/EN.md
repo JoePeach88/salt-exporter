@@ -14,7 +14,7 @@ opt
    └── exporters
        ├   modules
        ├   └── salt_master_local_client.py
-       └── master_exporter
+       └── salt-exporter
            ├── env.py
            ├── exporter
            └── exporter.py
@@ -38,7 +38,7 @@ systemctl daemon-reload && systemctl enable --now salt-master-exporter.service
 
 ## Configuration
 
-1. Go to config file: `/opt/saltstack/exporters/master_exporter/exporter`
+1. Go to config file: `/opt/saltstack/exporters/salt-exporter/exporter`
 
 2. Edit configuration:
 
