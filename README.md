@@ -26,8 +26,10 @@ title: Single-master
 flowchart LR
 
   subgraph master
-    collector_master[collector]
-    metric_server
+    subgraph exporter
+      collector_master[collector]
+      metric_server
+    end
   end
 
   collector_master--metrics_data-->metric_server
@@ -40,21 +42,29 @@ title: Multi-master (without syndic)
 ---
 flowchart LR
   subgraph slave_master1[master 1]
-    collector_slave1[collector]
+    subgraph slave_exporter1[exporter]
+      collector_slave1[collector]
+    end
   end
 
   subgraph slave_master2[master 2]
-    collector_slave2[collector]
+    subgraph slave_exporter2[exporter]
+      collector_slave2[collector]
+    end
   end
 
   subgraph slave_master3[master n]
-    collector_slave3[collector]
+    subgraph slave_exporter3[exporter]
+      collector_slave3[collector]
+    end
   end
 
   subgraph main_master
-    collector_master[collector]
-    metric_server
-    receiver
+    subgraph master_exporter[exporter]
+      collector_master[collector]
+      metric_server
+      receiver
+    end
   end
 
   collector_slave1 & collector_slave2 & collector_slave3--"POST tcp/9112 (send metrics)"-->receiver
@@ -81,8 +91,10 @@ flowchart TD
   end
 
   subgraph main_master
-    collector_master[collector]
-    metric_server
+    subgraph exporter
+      collector_master[collector]
+      metric_server
+    end
   end
 
   syndic_slave1 & syndic_slave2 & syndic_slave3--"send pub"-->main_master
