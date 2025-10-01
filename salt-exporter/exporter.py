@@ -32,7 +32,8 @@ def display_top(snapshot, key_type='lineno', limit=10):
     for index, stat in enumerate(top_stats[:limit], 1):
         frame = stat.traceback[0]
         filename = os.sep.join(frame.filename.split(os.sep)[-2:])
-        log.info("#%s: %s:%s: %.1f KiB count: %s" % (index, filename, frame.lineno, stat.size / 1024, stat.count))
+        log.info("#%s: %s:%s: %.1f KiB count: %s"
+              % (index, filename, frame.lineno, stat.size / 1024, stat.count))
         line = linecache.getline(frame.filename, frame.lineno).strip()
         if line:
             log.info('    %s' % line)
@@ -46,7 +47,7 @@ def display_top(snapshot, key_type='lineno', limit=10):
 
 
 __virtualname__ = "salt_master_metrics"
-__version__ = '1.01'
+__version__ = '1.02'
 log = logging.getLogger(__name__)
 formatter = logging.Formatter(fmt="%(message)s")
 handler = logging.StreamHandler(stream=sys.stdout)
@@ -320,10 +321,10 @@ class SaltMetricsExporter:
                     for metric_data in value:
                         _set_or_observe(metric['metric'].labels(**{k: v for k, v in metric_data.items() if k not in ('value')}), metric_data['value'])
                 del metric
-            del counts
             log.info('Metrics updated.')
         except Exception:
             log.error(f'Something went wrong when trying to update metrics data: {traceback.format_exc()}')
+        del counts
 
     def send_data_to_main(self, counts: dict):
         _headers = {
@@ -377,7 +378,7 @@ class SaltMetricsExporter:
             for minion, data in main_status_map.items()
         ]
 
-        del main_status_map, counts_status_map
+        del main_status_map, counts_status_map, received
         return main
 
     async def run(self, addr: str = None, port: int = None, delay: int = None):
