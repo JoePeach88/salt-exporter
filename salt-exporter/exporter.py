@@ -32,8 +32,7 @@ def display_top(snapshot, key_type='lineno', limit=10):
     for index, stat in enumerate(top_stats[:limit], 1):
         frame = stat.traceback[0]
         filename = os.sep.join(frame.filename.split(os.sep)[-2:])
-        log.info("#%s: %s:%s: %.1f KiB count: %s"
-              % (index, filename, frame.lineno, stat.size / 1024, stat.count))
+        log.info("#%s: %s:%s: %.1f KiB count: %s" % (index, filename, frame.lineno, stat.size / 1024, stat.count))
         line = linecache.getline(frame.filename, frame.lineno).strip()
         if line:
             log.info('    %s' % line)
@@ -46,7 +45,7 @@ def display_top(snapshot, key_type='lineno', limit=10):
     log.info("Total allocated size: %.1f KiB" % (total / 1024))
 
 
-__virtualname__ = "salt_master_metrics"
+__virtualname__ = "salt_exporter"
 __version__ = '1.02'
 log = logging.getLogger(__name__)
 formatter = logging.Formatter(fmt="%(message)s")
@@ -68,65 +67,54 @@ def check_port(host: str, port: int):
 
 class SaltMetricsExporter:
     METRICS_INFO = {
-        'total_jobs': {
+        'salt_all_jobs_total': {
             'name': 'salt_all_jobs_total',
             'desc': 'Total jobs count for current date.',
             'type': prom.Gauge
         },
-        'total_active_jobs': {
-            'name': 'salt_active_jobs_total',
+        'salt_active_jobs_total': {
             'desc': 'Total active jobs count.',
             'type': prom.Gauge
         },
-        'minions_up_count': {
-            'name': 'salt_minions_up_total',
+        'salt_minions_up_total': {
             'desc': 'Total up minions count.',
             'type': prom.Gauge
         },
-        'minions_down_count': {
-            'name': 'salt_minions_down_total',
+        'salt_minions_down_total': {
             'desc': 'Total down minions count.',
             'type': prom.Gauge
         },
-        'total_minions_count': {
-            'name': 'salt_minions_total',
+        'salt_minions_total': {
             'desc': 'Total minions count.',
             'type': prom.Gauge
         },
-        'accepted_minions_count': {
-            'name': 'salt_accepted_minions_total',
+        'salt_accepted_minions_total': {
             'desc': 'Total accepted minions count.',
             'type': prom.Gauge
         },
-        'denied_minions_count': {
-            'name': 'salt_denied_minions_total',
+        'salt_denied_minions_total': {
             'desc': 'Total denied minions count.',
             'type': prom.Gauge
         },
-        'rejected_minions_count': {
-            'name': 'salt_rejected_minions_total',
+        'salt_rejected_minions_total': {
             'desc': 'Total rejected minions count.',
             'type': prom.Gauge
         },
-        'unaccepted_minions_count': {
-            'name': 'salt_unaccepted_minions_total',
+        'salt_unaccepted_minions_total': {
             'desc': 'Total unaccepted minions count.',
             'type': prom.Gauge
         },
-        'minion_job_duration': {
-            'name': 'salt_minion_job_duration_seconds',
+        'salt_minion_job_duration_seconds': {
             'desc': 'Duration of Salt jobs in seconds.',
             'type': prom.Gauge,
             'labels': ['master', 'minion', 'jid', 'fun']
         },
-        'minion_job_retcode': {
-            'name': 'salt_minion_job_retcode',
+        'salt_minion_job_retcode': {
             'desc': 'Retcode of Salt job.',
             'type': prom.Gauge,
             'labels': ['master', 'minion', 'fun']
         },
-        'minion_status': {
-            'name': 'salt_minion_status',
+        'salt_minion_status': {
             'desc': 'Status of salt-minion (0 - offline, 1 - online).',
             'type': prom.Gauge,
             'labels': ['minion']
@@ -142,14 +130,13 @@ class SaltMetricsExporter:
         log.info("Creating metrics...")
         metrics = {}
         try:
-            for key, meta in self.METRICS_INFO.items():
+            for name, meta in self.METRICS_INFO.items():
                 metric_type = meta.get('type', prom.Gauge)
-                name = meta.get('name')
                 desc = meta.get('desc')
                 mode = meta.get('mode', 'single')
                 labels = meta.get('labels', None)
                 metrics.update({
-                    key: {
+                    name: {
                         'metric': metric_type(name, desc, labelnames=labels if labels else ()),
                         'type': 'labeled' if labels else 'not_labeled',
                         'mode': mode
@@ -162,9 +149,9 @@ class SaltMetricsExporter:
 
     def collect_data(self):
         metrics = {
-            'minion_status': [],
-            'minion_job_duration': [],
-            'minion_job_retcode': []
+            'salt_minion_status': [],
+            'salt_minion_job_duration_seconds': [],
+            'salt_minion_job_retcode': []
         }
         try:
             log.info('Starting collecting data...')
@@ -190,12 +177,12 @@ class SaltMetricsExporter:
 
             log.info('Preparing down minions metric...')
             down_metrics = [{'minion': m, 'value': 0} for m in minions_down]
-            metrics['minion_status'].extend(down_metrics)
+            metrics['salt_minion_status'].extend(down_metrics)
             log.info('Prepared.')
 
             log.info('Preparing up minions metric...')
             up_metrics = [{'minion': m, 'value': 1} for m in minions_up]
-            metrics['minion_status'].extend(up_metrics)
+            metrics['salt_minion_status'].extend(up_metrics)
             log.info('Prepared.')
 
             all_minions = minions_up + minions_down
@@ -266,21 +253,21 @@ class SaltMetricsExporter:
                             job_retcodes.append(result['job_retcode'])
                     except Exception:
                         log.error(f'Error processing minion {futures[future]}: {traceback.format_exc()}')
-                metrics['minion_job_duration'].extend(job_durations)
-                metrics['minion_job_retcode'].extend(job_retcodes)
+                metrics['salt_minion_job_duration_seconds'].extend(job_durations)
+                metrics['salt_minion_job_retcode'].extend(job_retcodes)
             log.info('Prepared.')
 
             log.info('All data collected and prepared successfully!')
             metrics.update({
-                'total_jobs': {'value': len(job_list)},
-                'total_active_jobs': {'value': len(active_jobs_list)},
-                'minions_up_count': {'value': len(minions_up)},
-                'minions_down_count': {'value': len(minions_down)},
-                'total_minions_count': {'value': len(all_minions)},
-                'accepted_minions_count': {'value': len(key_data.get('minions', []))},
-                'denied_minions_count': {'value': len(key_data.get('minions_denied', []))},
-                'rejected_minions_count': {'value': len(key_data.get('minions_rejected', []))},
-                'unaccepted_minions_count': {'value': len(key_data.get('minions_pre', []))}
+                'salt_all_jobs_total': {'value': len(job_list)},
+                'salt_active_jobs_total': {'value': len(active_jobs_list)},
+                'salt_minions_up_total': {'value': len(minions_up)},
+                'salt_minions_down_total': {'value': len(minions_down)},
+                'salt_minions_total': {'value': len(all_minions)},
+                'salt_accepted_minions_total': {'value': len(key_data.get('minions', []))},
+                'salt_denied_minions_total': {'value': len(key_data.get('minions_denied', []))},
+                'salt_rejected_minions_total': {'value': len(key_data.get('minions_rejected', []))},
+                'salt_unaccepted_minions_total': {'value': len(key_data.get('minions_pre', []))}
             })
 
             del minion_statuses, job_list, active_jobs_list, minions_up, minions_down, all_minions, key_data, down_metrics, up_metrics
@@ -339,33 +326,33 @@ class SaltMetricsExporter:
             log.error(f'Something went wrong when trying to sent metrics data to main master server: {traceback.format_exc()}')
 
     def merge_metrics(self, main: dict, received: dict):
-        for key in ['total_active_jobs', 'total_jobs', 'minions_down_count']:
+        for key in ['salt_active_jobs_total', 'salt_all_jobs_total', 'salt_minions_down_total']:
             val1 = main.get(key, {}).get('value', 0)
             val2 = received.get(key, {}).get('value', 0)
             main[key] = {'value': val1 + val2}
 
-        total_minions = main.get('total_minions_count', {}).get('value', 0)
-        minions_up_1 = main.get('minions_up_count', {}).get('value', 0)
-        minions_up_2 = received.get('minions_up_count', {}).get('value', 0)
+        total_minions = main.get('salt_minions_total', {}).get('value', 0)
+        minions_up_1 = main.get('salt_minions_up_total', {}).get('value', 0)
+        minions_up_2 = received.get('salt_minions_up_total', {}).get('value', 0)
 
-        main['minions_down_count'] = {
+        main['salt_minions_down_total'] = {
             'value': total_minions - (minions_up_1 + minions_up_2)
         }
 
-        main['minions_up_count'] = {
+        main['salt_minions_up_total'] = {
             'value': minions_up_1 + minions_up_2
         }
 
-        main['minion_job_duration'].extend(received['minion_job_duration'])
-        main['minion_job_retcode'].extend(received['minion_job_retcode'])
+        main['salt_minion_job_duration_seconds'].extend(received['salt_minion_job_duration_seconds'])
+        main['salt_minion_job_retcode'].extend(received['salt_minion_job_retcode'])
 
         main_status_map = {
             item['minion']: {'value': item['value']}
-            for item in main.get('minion_status', [])
+            for item in main.get('salt_minion_status', [])
         }
         counts_status_map = {
             item['minion']: {'value': item['value']}
-            for item in received.get('minion_status', [])
+            for item in received.get('salt_minion_status', [])
         }
 
         for minion, counts_data in counts_status_map.items():
@@ -373,7 +360,7 @@ class SaltMetricsExporter:
             if main_data and counts_data['value'] != main_data['value']:
                 main_status_map[minion]['value'] = 1
 
-        main['minion_status'] = [
+        main['salt_minion_status'] = [
             {'minion': minion, 'value': data['value']}
             for minion, data in main_status_map.items()
         ]

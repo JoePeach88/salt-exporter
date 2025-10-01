@@ -4,6 +4,7 @@ import salt.loader
 import salt.runner
 import salt.minion
 import salt.utils.jid
+import salt.pillar
 
 try:
     import dateutil.parser as dateutil_parser
