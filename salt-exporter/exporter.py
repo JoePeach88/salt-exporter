@@ -2,7 +2,6 @@ import socket
 import prometheus_client as prom
 import logging
 import sys
-import importlib
 import argparse
 import traceback
 import gc
@@ -10,28 +9,42 @@ import json
 import asyncio
 import requests
 import subprocess
-from pathlib import Path
 from env import *
 from datetime import datetime
 from flask import Flask, request, jsonify
+from threading import Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from modules.salt_master_local_client import salt_runner, salt_key, salt_print_job, salt_list_jobs
+if EXPORTER_DEBUG:
+    import tracemalloc
+    import linecache
 
 
-def import_parents(level: int = 1):
-    global __package__
-    file = Path(__file__).resolve()
-    parent, top = file.parent, file.parents[level]
-    sys.path.append(str(top))
-    try:
-        sys.path.remove(str(parent))
-    except ValueError:
-        pass
-    __package__ = '.'.join(parent.parts[len(top.parts):])
-    importlib.import_module(__package__)
+def display_top(snapshot, key_type='lineno', limit=10):
+    snapshot = snapshot.filter_traces((
+        tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+        tracemalloc.Filter(False, "<unknown>"),
+    ))
+    top_stats = snapshot.statistics(key_type)
+
+    log.info("Top %s lines" % limit)
+    for index, stat in enumerate(top_stats[:limit], 1):
+        frame = stat.traceback[0]
+        filename = os.sep.join(frame.filename.split(os.sep)[-2:])
+        log.info("#%s: %s:%s: %.1f KiB count: %s"
+              % (index, filename, frame.lineno, stat.size / 1024, stat.count))
+        line = linecache.getline(frame.filename, frame.lineno).strip()
+        if line:
+            log.info('    %s' % line)
+
+    other = top_stats[limit:]
+    if other:
+        size = sum(stat.size for stat in other)
+        log.info("%s other: %.1f KiB" % (len(other), size / 1024))
+    total = sum(stat.size for stat in top_stats)
+    log.info("Total allocated size: %.1f KiB" % (total / 1024))
 
 
-import_parents(2)
-from ..modules.salt_master_local_client import salt_runner, salt_key, salt_print_job, salt_list_jobs
 __virtualname__ = "salt_master_metrics"
 __version__ = '1.01'
 log = logging.getLogger(__name__)
@@ -325,31 +338,29 @@ class SaltMetricsExporter:
             log.error(f'Something went wrong when trying to sent metrics data to main master server: {traceback.format_exc()}')
 
     def merge_metrics(self, main: dict, received: dict):
-        merged = main.copy()
-
         for key in ['total_active_jobs', 'total_jobs', 'minions_down_count']:
-            val1 = merged.get(key, {}).get('value', 0)
+            val1 = main.get(key, {}).get('value', 0)
             val2 = received.get(key, {}).get('value', 0)
-            merged[key] = {'value': val1 + val2}
+            main[key] = {'value': val1 + val2}
 
-        total_minions = merged.get('total_minions_count', {}).get('value', 0)
-        minions_up_1 = merged.get('minions_up_count', {}).get('value', 0)
+        total_minions = main.get('total_minions_count', {}).get('value', 0)
+        minions_up_1 = main.get('minions_up_count', {}).get('value', 0)
         minions_up_2 = received.get('minions_up_count', {}).get('value', 0)
 
-        merged['minions_down_count'] = {
+        main['minions_down_count'] = {
             'value': total_minions - (minions_up_1 + minions_up_2)
         }
 
-        merged['minions_up_count'] = {
+        main['minions_up_count'] = {
             'value': minions_up_1 + minions_up_2
         }
 
-        merged['minion_job_duration'].extend(received['minion_job_duration'])
-        merged['minion_job_retcode'].extend(received['minion_job_retcode'])
+        main['minion_job_duration'].extend(received['minion_job_duration'])
+        main['minion_job_retcode'].extend(received['minion_job_retcode'])
 
         main_status_map = {
             item['minion']: {'value': item['value']}
-            for item in merged.get('minion_status', [])
+            for item in main.get('minion_status', [])
         }
         counts_status_map = {
             item['minion']: {'value': item['value']}
@@ -361,13 +372,13 @@ class SaltMetricsExporter:
             if main_data and counts_data['value'] != main_data['value']:
                 main_status_map[minion]['value'] = 1
 
-        merged['minion_status'] = [
+        main['minion_status'] = [
             {'minion': minion, 'value': data['value']}
             for minion, data in main_status_map.items()
         ]
 
         del main_status_map, counts_status_map
-        return merged
+        return main
 
     async def run(self, addr: str = None, port: int = None, delay: int = None):
         addr = addr or EXPORTER_ADDR
@@ -396,7 +407,10 @@ class SaltMetricsExporter:
                         self.send_data_to_main(self.current_metrics)
                     else:
                         self.update_metrics(self.current_metrics)
-            gc.collect()
+            if EXPORTER_DEBUG:
+                snapshot = tracemalloc.take_snapshot()
+                display_top(snapshot)
+                del snapshot
             await asyncio.sleep(delay)
 
     async def run_receiver(self, addr: str = None, port: int = None):
@@ -429,16 +443,13 @@ class SaltMetricsExporter:
 
         app = create_flask_app()
 
-        from threading import Thread
-
         def run_flask():
-            app.run(host=addr, port=port, debug=EXPORTER_DEBUG)
+            app.run(host=addr, port=port)
 
         thread = Thread(target=run_flask, daemon=True)
         thread.start()
         log.info(f"Receiver server started on {addr}:{port}")
         while thread.is_alive():
-            gc.collect()
             await asyncio.sleep(1)
 
 
@@ -485,6 +496,8 @@ if __name__ == '__main__':
         if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
             tasks.append(exporter.run_receiver(args.addr, args.rport))
         tasks.append(exporter.run(args.addr, args.port, args.delay))
+        if EXPORTER_DEBUG:
+            tracemalloc.start()
         loop.run_until_complete(asyncio.gather(*tasks))
     except KeyboardInterrupt:
         log.info('Server stopped by user.')

@@ -13,9 +13,9 @@ git clone git@github.com:JoePeach88/salt-exporter.git
 opt
 └──saltstack
    └── exporters
-       ├   modules
-       ├   └── salt_master_local_client.py
        └── salt-exporter
+           ├   modules
+           ├   └── salt_master_local_client.py
            ├── env.py
            ├── exporter
            └── exporter.py
