@@ -326,29 +326,31 @@ class SaltMetricsExporter:
             log.error(f'Something went wrong when trying to sent metrics data to main master server: {traceback.format_exc()}')
 
     def merge_metrics(self, main: dict, received: dict):
-        for key in ['salt_active_jobs_total', 'salt_all_jobs_total', 'salt_minions_down_total']:
-            val1 = main.get(key, {}).get('value', 0)
-            val2 = received.get(key, {}).get('value', 0)
-            main[key] = {'value': val1 + val2}
+        merged = main.copy()
 
-        total_minions = main.get('salt_minions_total', {}).get('value', 0)
-        minions_up_1 = main.get('salt_minions_up_total', {}).get('value', 0)
+        for key in ['salt_active_jobs_total', 'salt_all_jobs_total', 'salt_minions_down_total']:
+            val1 = merged.get(key, {}).get('value', 0)
+            val2 = received.get(key, {}).get('value', 0)
+            merged[key] = {'value': val1 + val2}
+
+        total_minions = merged.get('salt_minions_total', {}).get('value', 0)
+        minions_up_1 = merged.get('salt_minions_up_total', {}).get('value', 0)
         minions_up_2 = received.get('salt_minions_up_total', {}).get('value', 0)
 
-        main['salt_minions_down_total'] = {
+        merged['salt_minions_down_total'] = {
             'value': total_minions - (minions_up_1 + minions_up_2)
         }
 
-        main['salt_minions_up_total'] = {
+        merged['salt_minions_up_total'] = {
             'value': minions_up_1 + minions_up_2
         }
 
-        main['salt_minion_job_duration_seconds'].extend(received['salt_minion_job_duration_seconds'])
-        main['salt_minion_job_retcode'].extend(received['salt_minion_job_retcode'])
+        merged['salt_minion_job_duration_seconds'].extend(received['salt_minion_job_duration_seconds'])
+        merged['salt_minion_job_retcode'].extend(received['salt_minion_job_retcode'])
 
         main_status_map = {
             item['minion']: {'value': item['value']}
-            for item in main.get('salt_minion_status', [])
+            for item in merged.get('salt_minion_status', [])
         }
         counts_status_map = {
             item['minion']: {'value': item['value']}
@@ -360,13 +362,13 @@ class SaltMetricsExporter:
             if main_data and counts_data['value'] != main_data['value']:
                 main_status_map[minion]['value'] = 1
 
-        main['salt_minion_status'] = [
+        merged['salt_minion_status'] = [
             {'minion': minion, 'value': data['value']}
             for minion, data in main_status_map.items()
         ]
 
-        del main_status_map, counts_status_map, received
-        return main
+        del main_status_map, counts_status_map, received, main
+        return merged
 
     async def run(self, addr: str = None, port: int = None, delay: int = None):
         addr = addr or EXPORTER_ADDR
