@@ -20,6 +20,7 @@ if EXPORTER_DEBUG:
     import linecache
 
 
+# https://stackoverflow.com/a/45679009
 def display_top(snapshot, key_type='lineno', limit=10):
     snapshot = snapshot.filter_traces((
         tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
@@ -31,8 +32,7 @@ def display_top(snapshot, key_type='lineno', limit=10):
     for index, stat in enumerate(top_stats[:limit], 1):
         frame = stat.traceback[0]
         filename = os.sep.join(frame.filename.split(os.sep)[-2:])
-        log.info("#%s: %s:%s: %.1f KiB count: %s"
-              % (index, filename, frame.lineno, stat.size / 1024, stat.count))
+        log.info("#%s: %s:%s: %.1f KiB count: %s" % (index, filename, frame.lineno, stat.size / 1024, stat.count))
         line = linecache.getline(frame.filename, frame.lineno).strip()
         if line:
             log.info('    %s' % line)
