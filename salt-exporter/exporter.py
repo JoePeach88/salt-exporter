@@ -385,33 +385,39 @@ class SaltMetricsExporter:
         port = port or EXPORTER_PORT
         delay = delay or EXPORTER_COLLECT_DELAY
 
-        if EXPORTER_MAIN_MASTER and EXPORTER_MULTIMASTER_ENABLED:
+        if EXPORTER_MAIN_MASTER:
             prom.start_http_server(port, addr=addr)
             log.info(f"Exporter started on {addr}:{port}")
 
-        while True:
-            self.collect_data()
-            if not EXPORTER_MULTIMASTER_ENABLED:
-                self.update_metrics(self.current_metrics)
-            else:
-                if EXPORTER_MAIN_MASTER:
-                    if self.received_metrics:
-                        self.update_metrics(self.merge_metrics(self.current_metrics, self.received_metrics))
-                    else:
-                        self.update_metrics(self.current_metrics)
+        async def run_metrics_collector(delay):
+            while True:
+                self.collect_data()
+                if not EXPORTER_MULTIMASTER_ENABLED:
+                    self.update_metrics(self.current_metrics)
                 else:
-                    main_reachable = check_reachable(EXPORTER_MAIN_MASTER_ADDR)
-                    port_open = check_port(EXPORTER_MAIN_MASTER_ADDR, EXPORTER_RECEIVER_PORT)
-
-                    if main_reachable and port_open:
-                        self.send_data_to_main(self.current_metrics)
+                    if EXPORTER_MAIN_MASTER:
+                        if self.received_metrics:
+                            self.update_metrics(self.merge_metrics(self.current_metrics, self.received_metrics))
+                        else:
+                            self.update_metrics(self.current_metrics)
                     else:
-                        self.update_metrics(self.current_metrics)
-            if EXPORTER_DEBUG:
-                snapshot = tracemalloc.take_snapshot()
-                display_top(snapshot)
-                del snapshot
-            await asyncio.sleep(delay)
+                        main_reachable = check_reachable(EXPORTER_MAIN_MASTER_ADDR)
+                        port_open = check_port(EXPORTER_MAIN_MASTER_ADDR, EXPORTER_RECEIVER_PORT)
+
+                        if main_reachable and port_open:
+                            self.send_data_to_main(self.current_metrics)
+                        else:
+                            self.update_metrics(self.current_metrics)
+                if EXPORTER_DEBUG:
+                    snapshot = tracemalloc.take_snapshot()
+                    display_top(snapshot)
+                    del snapshot
+                await asyncio.sleep(delay)
+
+        thread = Thread(target=lambda: asyncio.run(run_metrics_collector(delay)), daemon=True)
+        thread.start()
+        while thread.is_alive():
+            await asyncio.sleep(1)
 
     async def run_receiver(self, addr: str = None, port: int = None):
 
