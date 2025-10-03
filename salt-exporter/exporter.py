@@ -14,7 +14,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from modules.salt_master_local_client import salt_runner, salt_key, salt_print_job, salt_list_jobs
+from modules.salt_master_local_client import salt_runner, salt_client, salt_key, salt_print_job, salt_list_jobs, master_version
 if EXPORTER_DEBUG:
     import tracemalloc
     import linecache
@@ -28,21 +28,21 @@ def display_top(snapshot, key_type='lineno', limit=10):
     ))
     top_stats = snapshot.statistics(key_type)
 
-    log.info("Top %s lines" % limit)
+    log.debug("Top %s lines" % limit)
     for index, stat in enumerate(top_stats[:limit], 1):
         frame = stat.traceback[0]
         filename = os.sep.join(frame.filename.split(os.sep)[-2:])
-        log.info("#%s: %s:%s: %.1f KiB count: %s" % (index, filename, frame.lineno, stat.size / 1024, stat.count))
+        log.debug("#%s: %s:%s: %.1f KiB count: %s" % (index, filename, frame.lineno, stat.size / 1024, stat.count))
         line = linecache.getline(frame.filename, frame.lineno).strip()
         if line:
-            log.info('    %s' % line)
+            log.debug('    %s' % line)
 
     other = top_stats[limit:]
     if other:
         size = sum(stat.size for stat in other)
-        log.info("%s other: %.1f KiB" % (len(other), size / 1024))
+        log.debug("%s other: %.1f KiB" % (len(other), size / 1024))
     total = sum(stat.size for stat in top_stats)
-    log.info("Total allocated size: %.1f KiB" % (total / 1024))
+    log.debug("Total allocated size: %.1f KiB" % (total / 1024))
 
 
 __virtualname__ = "salt_exporter"
@@ -118,6 +118,16 @@ class SaltMetricsExporter:
             'desc': 'Status of salt-minion (0 - offline, 1 - online).',
             'type': prom.Gauge,
             'labels': ['minion']
+        },
+        'salt_minion_version': {
+            'desc': 'Version of salt-minion.',
+            'type': prom.Gauge,
+            'labels': ['minion', 'version']
+        },
+        'salt_master_version': {
+            'desc': 'Version of salt-master.',
+            'type': prom.Gauge,
+            'labels': ['master', 'version']
         }
     }
 
@@ -151,12 +161,23 @@ class SaltMetricsExporter:
         metrics = {
             'salt_minion_status': [],
             'salt_minion_job_duration_seconds': [],
-            'salt_minion_job_retcode': []
+            'salt_minion_job_retcode': [],
+            'salt_minion_version': []
         }
         try:
             log.info('Starting collecting data...')
             log.info('Collecting minion statuses...')
-            minion_statuses = salt_runner.cmd('manage.status', print_event=EXPORTER_DEBUG)
+            minion_statuses_return = salt_client.cmd('*', 'test.ping', full_return=True)
+            minion_statuses = {
+                'up': [],
+                'down': []
+            }
+            for m in minion_statuses_return:
+                if minion_statuses_return[m] and 'ret' in minion_statuses_return[m]:
+                    minion_statuses['up'].append(m)
+                else:
+                    minion_statuses['down'].append(m)
+            gc.collect()
             log.info('Collected.')
 
             log.info('Collecting jobs...')
@@ -164,11 +185,18 @@ class SaltMetricsExporter:
             end_time = datetime.today().replace(hour=23, minute=59, second=59).strftime("%Y, %b %d %H:%M:%S")
             job_list = salt_list_jobs(start_time=start_time, end_time=end_time)
             job_list = dict(sorted(job_list.items(), reverse=True))
+            gc.collect()
             log.info('Collected.')
 
             log.info('Collecting active jobs...')
             active_jobs_list = salt_runner.cmd('jobs.active', print_event=EXPORTER_DEBUG)
+            gc.collect()
             log.info('Collected.')
+
+            log.info('Collecting versions of minions...')
+            minion_versions = salt_client.cmd('*', 'test.version', full_return=True)
+            gc.collect()
+            log.info(f'Collected.')
 
             key_data = salt_key.list_keys()
 
@@ -183,6 +211,15 @@ class SaltMetricsExporter:
             log.info('Preparing up minions metric...')
             up_metrics = [{'minion': m, 'value': 1} for m in minions_up]
             metrics['salt_minion_status'].extend(up_metrics)
+            log.info('Prepared.')
+
+            log.info('Preparing minions versions metric...')
+            minion_version_metric = [
+                {'minion': m, 'version': minion_versions[m]['ret'], 'value': 1}
+                for m in minion_versions
+                if minion_versions[m] and 'ret' in minion_versions[m]
+            ]
+            metrics['salt_minion_version'].extend(minion_version_metric)
             log.info('Prepared.')
 
             all_minions = minions_up + minions_down
@@ -223,7 +260,8 @@ class SaltMetricsExporter:
                     for val in job_return.values():
                         if isinstance(val, dict):
                             job_duration += val.get('duration', 0)
-
+                
+                del last_job_details, matching_job_ids, first_key
                 return {
                     'job_duration': {
                         'master': MASTER_HOSTNAME,
@@ -255,6 +293,7 @@ class SaltMetricsExporter:
                         log.error(f'Error processing minion {futures[future]}: {traceback.format_exc()}')
                 metrics['salt_minion_job_duration_seconds'].extend(job_durations)
                 metrics['salt_minion_job_retcode'].extend(job_retcodes)
+                del job_durations, job_retcodes
             log.info('Prepared.')
 
             log.info('All data collected and prepared successfully!')
@@ -267,10 +306,11 @@ class SaltMetricsExporter:
                 'salt_accepted_minions_total': {'value': len(key_data.get('minions', []))},
                 'salt_denied_minions_total': {'value': len(key_data.get('minions_denied', []))},
                 'salt_rejected_minions_total': {'value': len(key_data.get('minions_rejected', []))},
-                'salt_unaccepted_minions_total': {'value': len(key_data.get('minions_pre', []))}
+                'salt_unaccepted_minions_total': {'value': len(key_data.get('minions_pre', []))},
+                'salt_master_version': [{'master': MASTER_HOSTNAME, 'version': master_version, 'value': 1}]
             })
 
-            del minion_statuses, job_list, active_jobs_list, minions_up, minions_down, all_minions, key_data, down_metrics, up_metrics
+            del minion_statuses, minion_statuses_return, job_list, active_jobs_list, minions_up, minions_down, all_minions, key_data, down_metrics, up_metrics, minion_version_metric, minion_versions
 
         except Exception:
             log.error(f'Something went wrong when trying to collect and prepare metrics data: {traceback.format_exc()}')
@@ -279,7 +319,7 @@ class SaltMetricsExporter:
                 metrics.update(self.current_metrics)
 
         if EXPORTER_DEBUG:
-            log.info(f'Collected metrics: {metrics}')
+            log.debug(f'Collected metrics: {metrics}')
 
         if self.current_metrics:
             self.current_metrics.clear()
@@ -347,6 +387,8 @@ class SaltMetricsExporter:
 
         merged['salt_minion_job_duration_seconds'].extend(received['salt_minion_job_duration_seconds'])
         merged['salt_minion_job_retcode'].extend(received['salt_minion_job_retcode'])
+        merged['salt_minion_version'].extend(received['salt_minion_version'])
+        merged['salt_master_version'].extend(received['salt_master_version'])
 
         main_status_map = {
             item['minion']: {'value': item['value']}
@@ -393,7 +435,7 @@ class SaltMetricsExporter:
                     else:
                         main_reachable = check_reachable(EXPORTER_MAIN_MASTER_ADDR)
                         port_open = check_port(EXPORTER_MAIN_MASTER_ADDR, EXPORTER_RECEIVER_PORT)
-
+                        log.debug(f'Main master reachable {main_reachable} and port open {port_open}')
                         if main_reachable and port_open:
                             self.send_data_to_main(self.current_metrics)
                         else:

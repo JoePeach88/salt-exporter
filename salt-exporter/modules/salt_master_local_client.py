@@ -1,28 +1,32 @@
-import salt.config
 import salt.key
-import salt.loader
 import salt.runner
 import salt.minion
-import salt.utils.jid
-import salt.pillar
+import salt.version
+from salt.config import master_config as mast_conf, minion_config as min_conf
+from salt.utils.jid import jid_to_time
+from salt.client import get_local_client
+from salt.loader import grains as grns, minion_mods, utils as utls
+from salt.pillar import get_pillar
 
 try:
-    import dateutil.parser as dateutil_parser
+    from dateutil.parser import parse as du_parse
 
     DATEUTIL_SUPPORT = True
 except ImportError:
     DATEUTIL_SUPPORT = False
 
-master_config = salt.config.master_config('/etc/salt/master')
-minion_config = salt.config.minion_config('/etc/salt/minion')
-grains = salt.loader.grains(master_config)
+master_config = mast_conf('/etc/salt/master')
+minion_config = min_conf('/etc/salt/minion')
+grains = grns(master_config)
 master_config['grains'] = grains
-pillars = salt.pillar.get_pillar(master_config, grains, minion_config['id'], 'base').compile_pillar()
-utils = salt.loader.utils(master_config)
-modules = salt.loader.minion_mods(master_config, utils=utils)
+pillars = get_pillar(master_config, grains, minion_config['id'], 'base').compile_pillar()
+utils = utls(master_config)
+modules = minion_mods(master_config, utils=utils)
 salt_runner = salt.runner.RunnerClient(master_config)
+salt_client = get_local_client(master_config["conf_file"])
 salt_key = salt.key.Key(master_config)
 mminion = salt.minion.MasterMinion(master_config)
+master_version = salt.version.__saltstack_version__.string
 
 
 def _get_returner(returner_types):
@@ -56,7 +60,7 @@ def _format_job_instance(job):
 
 def _format_jid_instance(jid, job):
     ret = _format_job_instance(job)
-    ret["StartTime"] = salt.utils.jid.jid_to_time(jid)
+    ret["StartTime"] = jid_to_time(jid)
     return ret
 
 
@@ -112,20 +116,21 @@ def salt_list_jobs(start_time, end_time):
         if start_time and _match:
             _match = False
             if DATEUTIL_SUPPORT:
-                parsed_start_time = dateutil_parser.parse(start_time)
-                _start_time = dateutil_parser.parse(ret[item]["StartTime"])
-                if _start_time >= parsed_start_time:
+                _parsed_start_time = du_parse(start_time)
+                _start_time = du_parse(ret[item]["StartTime"])
+                if _start_time >= _parsed_start_time:
                     _match = True
 
         if end_time and _match:
             _match = False
             if DATEUTIL_SUPPORT:
-                parsed_end_time = dateutil_parser.parse(end_time)
-                _start_time = dateutil_parser.parse(ret[item]["StartTime"])
-                if _start_time <= parsed_end_time:
+                _parsed_end_time  = du_parse(end_time)
+                _start_time = du_parse(ret[item]["StartTime"])
+                if _start_time <= _parsed_end_time :
                     _match = True
 
         if _match:
             mret[item] = ret[item]
-
+    
+    del ret, returner
     return mret

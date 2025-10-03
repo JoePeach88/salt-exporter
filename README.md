@@ -16,6 +16,8 @@ This exporter scraping data from salt-masters.
 - `salt_denied_minions_total` - Total denied minions count.
 - `salt_rejected_minions_total` - Total rejected minions count.
 - `salt_unaccepted_minions_total` - Total unaccepted minions count.
+- `salt_master_version` - The version of master.
+- `salt_minion_version` - The version of minion.
 
 ## Arch
 
